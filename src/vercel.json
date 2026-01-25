@@ -1,0 +1,32 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/generate-from-drive",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/generate-automated-reel",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/generate-content",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/post-scheduled",
+      "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/cron/generate-notifications",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/send-notifications",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/sync-weather",
+      "schedule": "0 * * * *"
+    }
+  ]
+}

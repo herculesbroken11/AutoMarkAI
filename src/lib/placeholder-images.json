@@ -1,0 +1,64 @@
+{
+  "placeholderImages": [
+    {
+      "id": "hero-car",
+      "description": "A sleek, polished black sports car.",
+      "imageUrl": "https://images.unsplash.com/photo-1541348263662-e068662d82af?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHwxfHxzcG9ydHMlMjBjYXJ8ZW58MHx8fHwxNzY0MzQxOTUwfDA&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "sports car"
+    },
+    {
+      "id": "before-service",
+      "description": "A dirty car before detailing.",
+      "imageUrl": "https://images.unsplash.com/photo-1722809969227-7875119f0e89?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHw2fHxkaXJ0eSUyMGNhcnxlbnwwfHx8fDE3NjQzNzQ5OTF8MA&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "dirty car"
+    },
+    {
+      "id": "after-service",
+      "description": "A sparkling clean car after detailing.",
+      "imageUrl": "https://images.unsplash.com/photo-1694678505383-676d78ea3b96?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHw1fHxjbGVhbiUyMGNhcnxlbnwwfHx8fDE3NjQzNzQ5OTB8MA&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "clean car"
+    },
+    {
+      "id": "interior-before",
+      "description": "A car interior with dust and debris.",
+      "imageUrl": "https://images.unsplash.com/photo-1699221956369-b805bcd51772?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHwyfHxkaXJ0eSUyMGludGVyaW9yfGVufDB8fHx8MTc2NDM3NDk5MXww&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "dirty interior"
+    },
+    {
+      "id": "interior-after",
+      "description": "A pristine and clean car interior.",
+      "imageUrl": "https://images.unsplash.com/photo-1581622558663-b2e33377dfb2?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHw2fHxjbGVhbiUyMGludGVyaW9yfGVufDB8fHx8MTc2NDM3NDk5MHww&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "clean interior"
+    },
+    {
+      "id": "ceramic-coating",
+      "description": "Water beading on a car with ceramic coating.",
+      "imageUrl": "https://images.unsplash.com/photo-1547514503-f8f1e594fd3a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHw3fHx3YXRlciUyMGJlYWRpbmd8ZW58MHx8fHwxNzY0Mzc0OTkwfDA&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "water beading"
+    },
+    {
+      "id": "wheel-cleaning",
+      "description": "Close-up of a clean, shiny car wheel.",
+      "imageUrl": "https://images.unsplash.com/photo-1621712151262-60bd142ba19f?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHw0fHxjYXIlMjB3aGVlbHxlbnwwfHx8fDE3NjQzNzA5OTh8MA&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "car wheel"
+    },
+    {
+      "id": "window-tint",
+      "description": "A car with freshly tinted windows.",
+      "imageUrl": "https://images.unsplash.com/photo-1526459915562-c5ca724b1d02?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHw1fHxjYXIlMjB3aW5kb3d8ZW58MHx8fHwxNzY0MzA3NjUxfDA&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "car window"
+    },
+    {
+      "id": "paint-correction",
+      "description": "A split photo showing paint before and after correction.",
+      "imageUrl": "https://images.unsplash.com/photo-1762797118655-c2ab33283133?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHwxMHx8cGFpbnQlMjBjb3JyZWN0aW9ufGVufDB8fHx8MTc2NDM3NDk5MXww&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "paint correction"
+    },
+    {
+      "id": "user-avatar-1",
+      "description": "Avatar for a user.",
+      "imageUrl": "https://images.unsplash.com/photo-1725028748781-7adb1df9a943?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3NDE5ODJ8MHwxfHNlYXJjaHw1fHxwZXJzb24lMjBmYWNlfGVufDB8fHx8MTc2NDI5ODQ0Mnww&ixlib=rb-4.1.0&q=80&w=1080",
+      "imageHint": "person face"
+    }
+  ]
+}
