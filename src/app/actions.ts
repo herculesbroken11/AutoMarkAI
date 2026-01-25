@@ -28,8 +28,8 @@ async function postToInstagram(args: {
     mediaType: 'IMAGE' | 'REELS';
     caption: string;
 }): Promise<PostResponse> {
-    const INSTAGRAM_ACCESS_TOKEN = "IGAAa7UP521xlBZAGJvNWFjSERVblpqWjQ4V1hxSnB1Um5jNnd0YmNrMTBFSFRPZAkNXNEtTYjRkS284dGV6WEFTWXdMWGhoWVNzS0JxTGM5QndUTTlabGM0TDJvYS01VW1NcFpPdGt6T1FkUlpOQk1iMTFKVklsZAjRxVFo4dmFNSQZDZD";
-    const INSTAGRAM_ACCOUNT_ID = "17841478888363009";
+    const INSTAGRAM_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN;
+    const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID;
 
     if (!INSTAGRAM_ACCESS_TOKEN || !INSTAGRAM_ACCOUNT_ID) {
         const errorMsg = "Instagram Access Token or Account ID is not configured in .env file.";

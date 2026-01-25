@@ -6,13 +6,13 @@ import { getFirestore } from "firebase/firestore";
 
 // Unified configuration for all data services (Firestore, Storage).
 const dataFirebaseConfig = {
-  apiKey: "AIzaSyCr_ww4wutG61c1C8DaOIBGBmkjc3V2EWw",
-  authDomain: "porters-detailing.firebaseapp.com",
-  projectId: "porters-detailing",
-  storageBucket: "porters-detailing.firebasestorage.app",
-  messagingSenderId: "1032751350390",
-  appId: "1:1032751350390:web:5d09011d1fddba3a239557",
-  measurementId: "G-605E9LV6YK"
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyCr_ww4wutG61c1C8DaOIBGBmkjc3V2EWw",
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "porters-detailing.firebaseapp.com",
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "porters-detailing",
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || "porters-detailing.firebasestorage.app",
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "1032751350390",
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:1032751350390:web:5d09011d1fddba3a239557",
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID || "G-605E9LV6YK"
 };
 
 // Initialize a named app for all data services to avoid conflict with the default auth app.
