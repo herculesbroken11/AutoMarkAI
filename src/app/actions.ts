@@ -9,6 +9,18 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage, galleryFirestore } from '@/firebase/config'; 
 import axios from 'axios';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { isPostingPaused, POSTING_PAUSED_ERROR } from '@/lib/posting-control';
+import { logBlockedPublish, logPublishAttempt } from '@/lib/audit-log';
+import { canPublish, mapLegacyStatus, NOT_APPROVED_ERROR } from '@/lib/post-status';
+import {
+  generateIdempotencyKey,
+  checkDuplicateAttempt,
+  recordPublishAttempt,
+  acquirePublishLock,
+  releasePublishLock,
+  checkAlreadyPosted,
+  DUPLICATE_BLOCKED_ERROR,
+} from '@/lib/duplicate-protection';
 
 
 // Social API Logic
@@ -128,8 +140,112 @@ async function postToFacebook(args: { imageUrl: string, caption: string }): Prom
 
 // Server Action for Posting
 export async function postNowAction(post: any): Promise<PostResponse> {
+    let lockResult: { acquired: boolean; lockId?: string } | null = null;
+    let idempotencyKey: string | null = null;
+    let lockReleased = false;
+
     try {
+        // Phase 1: Global Kill Switch Check
+        if (await isPostingPaused()) {
+            const errorMsg = POSTING_PAUSED_ERROR;
+            console.error(`[POSTING_BLOCKED] Post ${post.id || 'unknown'} blocked: ${errorMsg}`);
+            
+            // Log blocked attempt
+            await logBlockedPublish({
+                actor: 'postNowAction',
+                platform: post.platform || 'unknown',
+                content_id: post.id,
+                reason: errorMsg,
+            });
+            
+            return { success: false, error: errorMsg };
+        }
+
+        // Phase 1: Backend-Enforced Approval Check
+        const postStatus = mapLegacyStatus(post.status || 'DRAFT');
+        if (!canPublish(postStatus)) {
+            const errorMsg = NOT_APPROVED_ERROR;
+            console.error(`[POSTING_BLOCKED] Post ${post.id || 'unknown'} blocked: Status ${postStatus} does not allow publishing`);
+            
+            // Log blocked attempt
+            await logBlockedPublish({
+                actor: 'postNowAction',
+                platform: post.platform || 'unknown',
+                content_id: post.id,
+                reason: `${errorMsg}: Status is ${postStatus}, must be SCHEDULED or APPROVED`,
+            });
+            
+            return { success: false, error: errorMsg };
+        }
+
+        // Phase 1: Duplicate Protection - Check if already posted
+        const alreadyPosted = await checkAlreadyPosted(post.id);
+        if (alreadyPosted.alreadyPosted) {
+            const errorMsg = DUPLICATE_BLOCKED_ERROR;
+            console.error(`[POSTING_BLOCKED] Post ${post.id} already posted with platform_post_id: ${alreadyPosted.platformPostId}`);
+            
+            await logBlockedPublish({
+                actor: 'postNowAction',
+                platform: post.platform || 'unknown',
+                content_id: post.id,
+                reason: `${errorMsg}: Post already has platform_post_id: ${alreadyPosted.platformPostId}`,
+            });
+            
+            return { success: false, error: errorMsg };
+        }
+
+        // Phase 1: Duplicate Protection - Generate idempotency key
+        const mediaSignature = post.videoUrl || post.stitchedImageUrl || post.imageUrls?.after || '';
+        idempotencyKey = generateIdempotencyKey({
+            content_id: post.id,
+            platform: post.platform || 'unknown',
+            scheduled_at_utc: post.scheduledAt || post.scheduled_at,
+            media_signature: mediaSignature.substring(0, 100), // Use first 100 chars as signature
+        });
+
+        // Check for duplicate attempt
+        const duplicateCheck = await checkDuplicateAttempt(idempotencyKey);
+        if (duplicateCheck.isDuplicate) {
+            const errorMsg = DUPLICATE_BLOCKED_ERROR;
+            console.error(`[POSTING_BLOCKED] Duplicate attempt detected for key: ${idempotencyKey}`);
+            
+            await logBlockedPublish({
+                actor: 'postNowAction',
+                platform: post.platform || 'unknown',
+                content_id: post.id,
+                reason: `${errorMsg}: Duplicate idempotency key ${idempotencyKey}`,
+            });
+            
+            return { success: false, error: errorMsg };
+        }
+
+        // Phase 1: Duplicate Protection - Acquire lock
+        lockResult = await acquirePublishLock(post.id, post.platform || 'unknown');
+        if (!lockResult.acquired) {
+            const errorMsg = DUPLICATE_BLOCKED_ERROR;
+            console.error(`[POSTING_BLOCKED] Could not acquire lock for post ${post.id}`);
+            
+            await logBlockedPublish({
+                actor: 'postNowAction',
+                platform: post.platform || 'unknown',
+                content_id: post.id,
+                reason: `${errorMsg}: Lock already held by another process`,
+            });
+            
+            return { success: false, error: errorMsg };
+        }
+
+        // Record attempt
+        await recordPublishAttempt({
+            idempotencyKey,
+            content_id: post.id,
+            platform: post.platform || 'unknown',
+            status: 'attempting',
+            actor: 'postNowAction',
+        });
+
         let result;
+        let lockReleased = false;
         const isVideoPost = !!post.videoUrl;
         const imageUrl = post.stitchedImageUrl || post.imageUrls?.after;
         const caption = `${post.text} ${post.hashtags ? post.hashtags.join(' ') : ''}`;
@@ -154,12 +270,61 @@ export async function postNowAction(post: any): Promise<PostResponse> {
              return { success: false, error: `Posting to ${post.platform} is not yet supported.` };
         }
 
+        // Release lock
+        if (lockResult.lockId) {
+            await releasePublishLock(lockResult.lockId);
+            lockReleased = true;
+        }
+
+        // Update attempt record
+        await recordPublishAttempt({
+            idempotencyKey,
+            content_id: post.id,
+            platform: post.platform || 'unknown',
+            status: result.success ? 'success' : 'failed',
+            platform_post_id: result.postId,
+            error: result.error,
+            actor: 'postNowAction',
+        });
+
+        // Log publish attempt result
+        await logPublishAttempt({
+            actor: 'postNowAction',
+            platform: post.platform || 'unknown',
+            content_id: post.id,
+            action: result.success ? 'posted' : 'failed',
+            reason: result.success 
+                ? `Successfully posted to ${post.platform}` 
+                : `Failed to post: ${result.error}`,
+            platform_response: {
+                post_id: result.postId,
+                error: result.error,
+            },
+        });
+
         if (result.success) {
             revalidatePath('/schedule');
         }
         return result;
        
     } catch (error: any) {
+        // Release lock on error
+        if (lockResult?.lockId && !lockReleased) {
+            await releasePublishLock(lockResult.lockId).catch(console.error);
+        }
+
+        // Update attempt record with error
+        if (idempotencyKey) {
+            await recordPublishAttempt({
+                idempotencyKey,
+                content_id: post.id,
+                platform: post.platform || 'unknown',
+                status: 'failed',
+                error: error.message,
+                actor: 'postNowAction',
+            }).catch(console.error);
+        }
+
         console.error(`Error in postNowAction for ${post.platform}:`, error);
         return { success: false, error: `Could not post to ${post.platform}. ${error.message}` };
     }

@@ -44,3 +44,10 @@ storage-debug.log
 *.njsproj
 *.sln
 *.sw?
+
+# Client-provided files and documentation
+New folder/
+New folder (2)/
+SocialAuto-PublishTemplate 1.json
+SECRETS_TO_ADD_TO_ENV.txt
+*.md
