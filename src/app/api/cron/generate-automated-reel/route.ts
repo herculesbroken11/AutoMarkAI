@@ -28,29 +28,7 @@ function createStreamingResponse() {
     return { stream, send };
 }
 
-// Fetches Google API credentials from Firestore
-async function getGoogleApiCredentials() {
-    const settingsRef = doc(galleryFirestore, 'settings', 'googleDrive');
-    const docSnap = await getDoc(settingsRef);
-    if (!docSnap.exists()) throw new Error("Google Drive API credentials are not configured in settings.");
-    return docSnap.data();
-}
-
-async function getRefreshedAccessToken(creds: any) {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-            client_id: creds.clientId,
-            client_secret: creds.clientSecret,
-            refresh_token: creds.refreshToken,
-            grant_type: 'refresh_token',
-        }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error_description || 'Failed to refresh access token.');
-    return data.access_token;
-}
+import { getGoogleApiCredentials, getRefreshedAccessToken, GoogleDriveAuthError } from '@/lib/google-drive-auth';
 
 // Helper to get the descriptive path of a folder
 async function getFolderPath(accessToken: string, folderId: string): Promise<string> {
@@ -189,9 +167,13 @@ export async function GET(request: NextRequest) {
 
                 send({ log: "Process complete!" });
                 
-            } catch (error: any) {
-                console.error('[CRON_GENERATE_REEL_ERROR]', error);
-                send({ error: `An unexpected error occurred: ${error.message}` });
+            } catch (error) {
+                if (error instanceof GoogleDriveAuthError) {
+                    send({ error: error.message, code: error.code });
+                } else {
+                    console.error('[CRON_GENERATE_REEL_ERROR]', error);
+                    send({ error: `An unexpected error occurred: ${error instanceof Error ? error.message : String(error)}` });
+                }
             } finally {
                 controller.close();
             }

@@ -1,35 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { collection, doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
-import { firestore } from '@/lib/firebase'; // This should be galleryFirestore
+import { NextRequest } from 'next/server';
+import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { galleryFirestore } from '@/firebase/config';
 import { ReadableStream } from 'stream/web';
+import { getGoogleApiCredentials, getRefreshedAccessToken, GoogleDriveAuthError } from '@/lib/google-drive-auth';
 
 const FOLDER_NAME = "AutoMarkAI Shop Photos";
 const SYNC_COLLECTION = 'synced_files';
-
-// --- Google API Helpers ---
-async function getGoogleApiCredentials() {
-    const settingsRef = doc(galleryFirestore, 'settings', 'googleDrive');
-    const docSnap = await getDoc(settingsRef);
-    if (!docSnap.exists()) throw new Error("Google Drive API credentials are not configured in settings.");
-    return docSnap.data();
-}
-
-async function getRefreshedAccessToken(creds: any) {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-            client_id: creds.clientId,
-            client_secret: creds.clientSecret,
-            refresh_token: creds.refreshToken,
-            grant_type: 'refresh_token',
-        }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error_description || 'Failed to refresh access token.');
-    return data.access_token;
-}
 
 async function findOrCreateFolder(accessToken: string, name: string): Promise<string> {
     const query = `mimeType='application/vnd.google-apps.folder' and name='${name}' and 'root' in parents and trashed=false`;
@@ -131,9 +107,12 @@ export async function POST(req: NextRequest) {
                 send({ log: `Scan complete. Found ${fileCount} files. Synced ${syncedCount} new or updated files.` });
                 send({ status: 'completed', fileCount, syncedCount });
 
-            } catch (error: any) {
+            } catch (error) {
                 console.error("Sync Error:", error);
-                send({ error: error.message || "An unknown error occurred during sync." });
+                const message = error instanceof GoogleDriveAuthError
+                    ? error.message
+                    : (error instanceof Error ? error.message : "An unknown error occurred during sync.");
+                send({ error: message, code: error instanceof GoogleDriveAuthError ? error.code : undefined });
             } finally {
                 controller.close();
             }

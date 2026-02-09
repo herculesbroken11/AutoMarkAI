@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { format, formatDistanceToNow } from "date-fns";
+import { formatToCST, createScheduledUTC } from "@/lib/timezone";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -89,6 +90,80 @@ export async function postToGoogleSheets(posts: any[]) {
     throw error;
   }
 }
+
+const SchedulePostDialog = ({ post, onSave, isSaving, onCancel }: { post: any, onSave: (id: string, date: string, time: string) => void, isSaving: boolean, onCancel: () => void }) => {
+    const [date, setDate] = useState('');
+    const [time, setTime] = useState('19:00');
+    
+    useEffect(() => {
+        // Set default date to tomorrow
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        setDate(tomorrow.toISOString().split('T')[0]);
+        
+        // If post already has scheduledAt, pre-fill the form
+        if (post.scheduledAt) {
+            const scheduled = new Date(post.scheduledAt);
+            // Convert UTC to CST/CDT for display
+            const cstDate = new Date(scheduled.toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+            setDate(cstDate.toISOString().split('T')[0]);
+            setTime(`${String(cstDate.getHours()).padStart(2, '0')}:${String(cstDate.getMinutes()).padStart(2, '0')}`);
+        }
+    }, [post]);
+    
+    const handleSave = () => {
+        if (!date || !time) {
+            return;
+        }
+        onSave(post.id, date, time);
+    }
+    
+    return (
+        <DialogContent className="max-w-md">
+            <DialogHeader>
+                <DialogTitle>Schedule Post</DialogTitle>
+                <DialogDescription>
+                    Set when this post should be published. Time is in CST/CDT.
+                </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                    <Label htmlFor="schedule-date">Date</Label>
+                    <Input 
+                        id="schedule-date" 
+                        type="date" 
+                        value={date} 
+                        onChange={(e) => setDate(e.target.value)}
+                        min={new Date().toISOString().split('T')[0]}
+                    />
+                </div>
+                <div className="space-y-2">
+                    <Label htmlFor="schedule-time">Time (CST/CDT)</Label>
+                    <Input 
+                        id="schedule-time" 
+                        type="time" 
+                        value={time} 
+                        onChange={(e) => setTime(e.target.value)}
+                    />
+                </div>
+                {date && time && (
+                    <div className="text-sm text-muted-foreground p-3 bg-muted rounded-lg">
+                        <p className="font-medium mb-1">Preview:</p>
+                        <p>Will be scheduled for: <strong>{date} {time} CST/CDT</strong></p>
+                        <p className="text-xs mt-1">(Stored in UTC: {createScheduledUTC(date, time)})</p>
+                    </div>
+                )}
+            </div>
+            <DialogFooter>
+                <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+                <Button onClick={handleSave} disabled={isSaving || !date || !time}>
+                    {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CalendarClock className="mr-2 h-4 w-4" />}
+                    Schedule
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+    );
+};
 
 const EditPostDialog = ({ post, onSave, isSaving, onCancel }: { post: any, onSave: (id: string, newText: string, newHashtags: string[]) => void, isSaving: boolean, onCancel: () => void }) => {
     const [text, setText] = useState(post.text);
@@ -274,7 +349,7 @@ const GroupedApprovalCard = ({ posts, onApprove, onReject, onEdit, onApproveAll,
 }
 
 
-const ScheduledCard = ({ post, onReturnToPending, onDelete, isPending }: { post: any, onReturnToPending: (id: string) => void, onDelete: (id: string) => void, isPending: boolean }) => {
+const ScheduledCard = ({ post, onReturnToPending, onDelete, onSchedule, isPending }: { post: any, onReturnToPending: (id: string) => void, onDelete: (id: string) => void, onSchedule: (id: string) => void, isPending: boolean }) => {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const mediaUrls = [
       ...(Array.isArray(post.imageUrls) ? post.imageUrls : []),
@@ -284,6 +359,11 @@ const ScheduledCard = ({ post, onReturnToPending, onDelete, isPending }: { post:
     const displayMediaUrl = mediaUrls && mediaUrls[0];
     const isVideo = !!post.videoUrl;
     const platformKey = post.platform.toLowerCase();
+    // Validate scheduledAt - ensure it's a valid date
+    const scheduledAt = post.scheduledAt ? (() => {
+      const date = new Date(post.scheduledAt);
+      return isNaN(date.getTime()) ? null : date;
+    })() : null;
     const createdAt = post.createdAt ? new Date(post.createdAt) : null;
 
     const handleAction = (action: 'return' | 'delete') => {
@@ -322,11 +402,21 @@ const ScheduledCard = ({ post, onReturnToPending, onDelete, isPending }: { post:
                     <PlatformIcon platform={platformKey} className="h-4 w-4 mr-1.5" />
                     {platformDisplay[platformKey]?.name || post.platform}
                 </Badge>
-                 <p className="text-sm font-medium text-muted-foreground">
-                    Scheduled {createdAt ? formatDistanceToNow(createdAt, { addSuffix: true }) : ''}
-                </p>
+                 {scheduledAt ? (
+                    <div className="text-sm">
+                        <p className="font-medium">Scheduled for:</p>
+                        <p className="text-muted-foreground">{formatToCST(scheduledAt)}</p>
+                    </div>
+                 ) : (
+                    <p className="text-sm font-medium text-muted-foreground">
+                        Scheduled {createdAt ? formatDistanceToNow(createdAt, { addSuffix: true }) : ''}
+                    </p>
+                 )}
             </div>
             <div className="flex items-center gap-1 self-start sm:self-center">
+                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => onSchedule(post.id)} disabled={isPending && isSubmitting} title="Change schedule time">
+                    <CalendarClock className="h-4 w-4" />
+                </Button>
                 <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleAction('return')} disabled={isPending && isSubmitting}>
                   {isPending && isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Undo2 className="h-4 w-4" />}
                 </Button>
@@ -556,19 +646,25 @@ export default function SchedulePage() {
   const [isGeneratingReel, setIsGeneratingReel] = useState(false);
   const { toast } = useToast();
   const [editingPost, setEditingPost] = useState<any | null>(null);
+  const [schedulingPost, setSchedulingPost] = useState<any | null>(null);
   const [reelGenLogs, setReelGenLogs] = useState<string[]>([]);
 
   const settingsRef = useMemo(() => doc(galleryFirestore, 'settings', 'scheduling'), []);
   const [settings, settingsLoading, settingsError] = useDocumentData(settingsRef);
 
   const pendingQuery = useMemo(() => query(postsRef, where('status', '==', 'pending')), []);
-  const scheduledQuery = useMemo(() => query(postsRef, where('status', '==', 'scheduled')), []);
+  const approvedQuery = useMemo(() => query(postsRef, where('status', '==', 'APPROVED')), []);
+  // Query for scheduled posts (using new 'SCHEDULED' status; legacy 'scheduled' will be migrated)
+  const scheduledQuery = useMemo(() => query(postsRef, where('status', '==', 'SCHEDULED')), []);
+  const scheduledLegacyQuery = useMemo(() => query(postsRef, where('status', '==', 'scheduled')), []);
   const postedQuery = useMemo(() => query(postsRef, where('status', '==', 'posted')), []);
   const rejectedQuery = useMemo(() => query(postsRef, where('status', '==', 'rejected')), []);
 
 
   const [pendingCollection, pendingLoading] = useCollection(pendingQuery);
+  const [approvedCollection, approvedLoading] = useCollection(approvedQuery);
   const [scheduledCollection, scheduledLoading] = useCollection(scheduledQuery);
+  const [scheduledLegacyCollection, scheduledLegacyLoading] = useCollection(scheduledLegacyQuery);
   const [postedCollection, postedLoading] = useCollection(postedQuery);
   const [rejectedCollection, rejectedLoading] = useCollection(rejectedQuery);
 
@@ -586,15 +682,21 @@ export default function SchedulePage() {
 
     return {
       groupedPendingPosts: Object.values(grouped),
-      loading: pendingLoading || scheduledLoading || postedLoading || rejectedLoading || settingsLoading
+      loading: pendingLoading || approvedLoading || scheduledLoading || scheduledLegacyLoading || postedLoading || rejectedLoading || settingsLoading
     };
-  }, [pendingCollection, scheduledCollection, postedCollection, rejectedCollection, settingsLoading]);
+  }, [pendingCollection, approvedCollection, scheduledCollection, postedCollection, rejectedCollection, settingsLoading]);
 
+
+  const approvedPosts = useMemo(() => {
+    if (!approvedCollection) return [];
+    return approvedCollection.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  }, [approvedCollection]);
 
   const scheduledPosts = useMemo(() => {
-    if (!scheduledCollection) return [];
-    return scheduledCollection.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  }, [scheduledCollection]);
+    const newScheduled = scheduledCollection?.docs.map(doc => ({ id: doc.id, ...doc.data() })) || [];
+    const legacyScheduled = scheduledLegacyCollection?.docs.map(doc => ({ id: doc.id, ...doc.data() })) || [];
+    return [...newScheduled, ...legacyScheduled];
+  }, [scheduledCollection, scheduledLegacyCollection]);
   
   const postedPosts = useMemo(() => {
     if (!postedCollection) return [];
@@ -658,24 +760,34 @@ export default function SchedulePage() {
   const handleApprove = (id: string) => {
     startTransition(async () => {
         try {
-            const postRef = doc(galleryFirestore, 'posts', id);
-            await updateDoc(postRef, { status: 'scheduled' });
+            // Use the approval action which handles admin checks and validation
+            const { approvePostAction } = await import('@/app/actions-approval');
+            const result = await approvePostAction(id, 'admin-ui');
             
-            const postSnap = await getDoc(postRef);
-            if(postSnap.exists()){
-                const postData = { id: postSnap.id, ...postSnap.data() };
-                postToGoogleSheets([postData]).catch(err => console.error("Sheets sync failed:", err));
-            }
+            if (result.success) {
+              const postRef = doc(galleryFirestore, 'posts', id);
+              const postSnap = await getDoc(postRef);
+              if(postSnap.exists()){
+                  const postData = { id: postSnap.id, ...postSnap.data() };
+                  postToGoogleSheets([postData]).catch(err => console.error("Sheets sync failed:", err));
+              }
 
-            toast({
+              toast({
                 title: "Post Approved!",
-                description: "The post has been moved to the scheduled list and synced.",
-            });
-        } catch (error) {
+                description: result.message || "The post has been moved to the scheduled list and synced.",
+              });
+            } else {
+              toast({
+                title: "Error",
+                description: result.error || "Could not approve the post. Make sure you're logged in as an admin.",
+                variant: "destructive",
+              });
+            }
+        } catch (error: any) {
             console.error("Error approving post:", error);
             toast({
                 title: "Error",
-                description: "Could not approve the post.",
+                description: error.message || "Could not approve the post. Make sure you're logged in as an admin.",
                 variant: "destructive",
             });
         }
@@ -684,25 +796,69 @@ export default function SchedulePage() {
   
   const handleApproveAll = (postsToApprove: any[]) => {
       startTransition(async () => {
-          const batch = writeBatch(galleryFirestore);
-          postsToApprove.forEach(post => {
-              const postRef = doc(galleryFirestore, 'posts', post.id);
-              batch.update(postRef, { status: 'scheduled' });
-          });
           try {
-            await batch.commit();
-
-            postToGoogleSheets(postsToApprove).catch(err => console.error("Sheets sync failed for bulk approve:", err));
-
-            toast({
+            // Use the approval action which handles admin checks and validation
+            const { approvePostsBatchAction } = await import('@/app/actions-approval');
+            const postIds = postsToApprove.map(p => p.id);
+            const result = await approvePostsBatchAction(postIds, 'admin-ui');
+            
+            if (result.success) {
+              postToGoogleSheets(postsToApprove).catch(err => console.error("Sheets sync failed for bulk approve:", err));
+              
+              toast({
                 title: "All Approved!",
-                description: `${postsToApprove.length} posts have been scheduled and synced.`,
-            });
-          } catch(error){
+                description: result.message || `${result.approved} post(s) have been scheduled and synced.`,
+              });
+            } else {
+              toast({ 
+                title: "Error", 
+                description: result.error || "Could not approve all posts.", 
+                variant: "destructive" 
+              });
+            }
+          } catch(error: any){
              console.error("Error approving all posts:", error);
-             toast({ title: "Error", description: "Could not approve all posts.", variant: "destructive" });
+             toast({ 
+               title: "Error", 
+               description: error.message || "Could not approve all posts. Make sure you're logged in as an admin.", 
+               variant: "destructive" 
+             });
           }
       });
+  };
+
+  const handleSchedule = (id: string, date: string, time: string) => {
+    startTransition(async () => {
+        try {
+            // Convert CST/CDT to UTC
+            const scheduledAtUTC = createScheduledUTC(date, time);
+            
+            // Use the schedule action which handles admin checks and validation
+            const { schedulePostAction } = await import('@/app/actions-approval');
+            const result = await schedulePostAction(id, scheduledAtUTC, 'admin-ui');
+            
+            if (result.success) {
+              toast({
+                title: "Post Scheduled!",
+                description: result.message || `Post scheduled for ${date} ${time} CST/CDT`,
+              });
+              setSchedulingPost(null);
+            } else {
+              toast({
+                title: "Error",
+                description: result.error || "Could not schedule the post.",
+                variant: "destructive",
+              });
+            }
+        } catch (error: any) {
+            console.error("Error scheduling post:", error);
+            toast({
+                title: "Error",
+                description: error.message || "Could not schedule the post.",
+                variant: "destructive",
+            });
+        }
+    });
   };
 
   const handleStatusUpdate = (id: string, status: 'pending' | 'rejected', successMessage: string) => {
@@ -856,9 +1012,12 @@ export default function SchedulePage() {
       )}
 
         <Tabs defaultValue="pending" className="w-full">
-            <TabsList className="grid w-full max-w-2xl grid-cols-4">
+            <TabsList className="grid w-full max-w-3xl grid-cols-5">
                 <TabsTrigger value="pending">
                     Pending ({groupedPendingPosts.length})
+                </TabsTrigger>
+                <TabsTrigger value="approved">
+                    Approved ({approvedPosts.length})
                 </TabsTrigger>
                 <TabsTrigger value="scheduled">
                     Scheduled ({scheduledPosts.length})
@@ -929,6 +1088,66 @@ export default function SchedulePage() {
             </Dialog>
             </TabsContent>
 
+            <Dialog open={!!schedulingPost} onOpenChange={(open) => !open && setSchedulingPost(null)}>
+                {schedulingPost && (
+                    <SchedulePostDialog 
+                        post={schedulingPost}
+                        onSave={handleSchedule}
+                        isSaving={isPending}
+                        onCancel={() => setSchedulingPost(null)}
+                    />
+                )}
+            </Dialog>
+
+            <TabsContent value="approved" className="mt-6">
+                {loading && <div className="text-center text-muted-foreground py-12">Loading posts...</div>}
+                {!loading && approvedPosts.length === 0 && (
+                    <div className="text-center text-muted-foreground py-12">
+                        <Check className="mx-auto h-12 w-12" />
+                        <h3 className="mt-4 text-lg font-semibold">No Approved Posts</h3>
+                        <p className="mt-1 text-sm">Approve some posts to schedule them.</p>
+                    </div>
+                )}
+                <div className="grid gap-4 sm:grid-cols-1">
+                    {approvedPosts.map((post) => (
+                        <Card key={post.id} className="flex flex-col sm:flex-row items-start sm:items-center p-4 gap-4">
+                            <div className="flex items-center gap-4 w-full sm:w-auto">
+                                {post.videoUrl ? (
+                                    <div className="w-16 h-16 bg-muted rounded-lg flex items-center justify-center flex-shrink-0">
+                                        <Film className="h-8 w-8 text-muted-foreground" />
+                                    </div>
+                                ) : (
+                                    (post.imageUrls && post.imageUrls[0]) ? (
+                                        <Image src={post.imageUrls[0]} width={64} height={64} className="rounded-lg aspect-square object-cover" alt={post.vehicle} />
+                                    ) : (
+                                        <div className="w-16 h-16 bg-muted rounded-lg flex items-center justify-center flex-shrink-0">
+                                            <Bot className="h-8 w-8 text-muted-foreground" />
+                                        </div>
+                                    )
+                                )}
+                                <div className="flex-grow">
+                                    <p className="font-semibold">{post.vehicle}</p>
+                                    <p className="text-sm text-muted-foreground">{post.service}</p>
+                                </div>
+                            </div>
+                            <div className="flex flex-col items-start sm:items-end w-full sm:w-auto text-left sm:text-right gap-2">
+                                <Badge className={`text-white ${platformDisplay[post.platform?.toLowerCase()]?.className || 'bg-gray-500'}`}>
+                                    <PlatformIcon platform={post.platform?.toLowerCase()} className="h-4 w-4 mr-1.5" />
+                                    {platformDisplay[post.platform?.toLowerCase()]?.name || post.platform}
+                                </Badge>
+                                <p className="text-sm text-muted-foreground">Ready to schedule</p>
+                            </div>
+                            <div className="flex items-center gap-1 self-start sm:self-center">
+                                <Button size="sm" variant="default" onClick={() => setSchedulingPost(post)} disabled={isPending}>
+                                    <CalendarClock className="mr-2 h-4 w-4" />
+                                    Schedule
+                                </Button>
+                            </div>
+                        </Card>
+                    ))}
+                </div>
+            </TabsContent>
+
             <TabsContent value="scheduled" className="mt-6">
                 <div className="mb-4 flex justify-end">
                     <Button asChild variant="outline">
@@ -948,7 +1167,10 @@ export default function SchedulePage() {
                 )}
                 <div className="grid gap-4 sm:grid-cols-1">
                     {scheduledPosts.map((post) => (
-                        <ScheduledCard key={post.id} post={post} onReturnToPending={handleReturnToPending} onDelete={handleDeletePost} isPending={isPending} />
+                        <ScheduledCard key={post.id} post={post} onReturnToPending={handleReturnToPending} onDelete={handleDeletePost} onSchedule={(id) => {
+                            const postToSchedule = scheduledPosts.find(p => p.id === id);
+                            if (postToSchedule) setSchedulingPost(postToSchedule);
+                        }} isPending={isPending} />
                     ))}
                 </div>
             </TabsContent>

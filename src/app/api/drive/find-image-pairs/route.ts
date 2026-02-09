@@ -1,32 +1,7 @@
-
 import { NextRequest, NextResponse } from 'next/server';
-import { doc, getDoc, collection, setDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import { doc, collection, setDoc, getDocs, query } from 'firebase/firestore';
 import { galleryFirestore } from '@/firebase/config';
-
-// --- Google Drive API Helpers ---
-
-async function getGoogleApiCredentials() {
-    const settingsRef = doc(galleryFirestore, 'settings', 'googleDrive');
-    const docSnap = await getDoc(settingsRef);
-    if (!docSnap.exists()) throw new Error("Google Drive API credentials are not configured in settings.");
-    return docSnap.data();
-}
-
-async function getRefreshedAccessToken(creds: any) {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-            client_id: creds.clientId,
-            client_secret: creds.clientSecret,
-            refresh_token: creds.refreshToken,
-            grant_type: 'refresh_token',
-        }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error_description || 'Failed to refresh access token.');
-    return data.access_token;
-}
+import { getGoogleApiCredentials, getRefreshedAccessToken, GoogleDriveAuthError } from '@/lib/google-drive-auth';
 
 async function findFolder(accessToken: string, name: string, parentId = 'root') {
     const query = `mimeType='application/vnd.google-apps.folder' and name='${name}' and '${parentId}' in parents and trashed=false`;
@@ -143,8 +118,12 @@ export async function GET(req: NextRequest) {
         // If the loop completes without finding any pairs in any service folder
         return NextResponse.json({ error: "No subfolders with both 'Before' and 'After' image folders were found in any service directory." }, { status: 404 });
 
-    } catch (error: any) {
+    } catch (error) {
+        if (error instanceof GoogleDriveAuthError) {
+            const status = error.code === 'INVALID_GRANT' ? 401 : 400;
+            return NextResponse.json({ error: error.message, code: error.code }, { status });
+        }
         console.error('Error finding image pairs:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to find image pairs' }, { status: 500 });
     }
 }

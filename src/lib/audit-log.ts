@@ -3,8 +3,7 @@
  * Phase 1: Comprehensive audit logging
  */
 
-import { collection, addDoc } from 'firebase/firestore';
-import { galleryFirestore } from '@/firebase/config';
+import { adminFirestore, isAdminSDKAvailable } from '@/firebase/admin';
 
 export type AuditAction = 
   | 'attempt_publish' 
@@ -39,20 +38,48 @@ export interface AuditLogEntry {
   };
 }
 
+/** Strip undefined values so Firestore accepts the document (recursive) */
+function stripUndefined<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined) {
+      continue; // Skip undefined values
+    }
+    
+    // Recursively strip undefined from nested objects
+    if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+      const cleaned = stripUndefined(value as Record<string, unknown>);
+      // Only add if the cleaned object has at least one property
+      if (Object.keys(cleaned).length > 0) {
+        result[key] = cleaned;
+      }
+    } else {
+      result[key] = value;
+    }
+  }
+  
+  return result;
+}
+
 /**
  * Log an audit entry
  * Phase 1: Comprehensive audit logging
  */
 export async function logAuditEntry(entry: AuditLogEntry): Promise<void> {
   try {
-    const auditRef = collection(galleryFirestore, 'audit_logs');
-    await addDoc(auditRef, {
+    if (!isAdminSDKAvailable() || !adminFirestore) {
+      console.warn('[AUDIT_LOG] Admin SDK not available, skipping log entry');
+      return;
+    }
+
+    const data = stripUndefined({
       ...entry,
       timestamp_utc: entry.timestamp_utc || new Date().toISOString(),
-      logged_at: new Date().toISOString(), // Firestore server timestamp equivalent
+      logged_at: new Date().toISOString(),
     });
+    await adminFirestore.collection('audit_logs').add(data);
   } catch (error) {
-    // Don't throw - audit logging should never break the main flow
     console.error('[AUDIT_LOG] Failed to log entry:', error, entry);
   }
 }
@@ -74,6 +101,11 @@ export async function logPublishAttempt(params: {
     error?: string;
   };
 }): Promise<void> {
+  // Clean platform_response to remove undefined values
+  const cleanedPlatformResponse = params.platform_response 
+    ? stripUndefined(params.platform_response as Record<string, unknown>)
+    : undefined;
+  
   await logAuditEntry({
     timestamp_utc: new Date().toISOString(),
     actor: params.actor,
@@ -82,7 +114,7 @@ export async function logPublishAttempt(params: {
     action: params.action,
     reason: params.reason,
     request_id: params.request_id,
-    platform_response: params.platform_response,
+    platform_response: Object.keys(cleanedPlatformResponse || {}).length > 0 ? cleanedPlatformResponse : undefined,
   });
 }
 

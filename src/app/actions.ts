@@ -9,9 +9,11 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage, galleryFirestore } from '@/firebase/config'; 
 import axios from 'axios';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { isPostingPaused, POSTING_PAUSED_ERROR } from '@/lib/posting-control';
+import { isPostingPaused, POSTING_PAUSED_ERROR, isPlatformEnabled, PLATFORM_DISABLED_ERROR } from '@/lib/posting-control';
 import { logBlockedPublish, logPublishAttempt } from '@/lib/audit-log';
 import { canPublish, mapLegacyStatus, NOT_APPROVED_ERROR } from '@/lib/post-status';
+import { checkRateCaps, autoPausePlatformIfNeeded, RATE_CAP_EXCEEDED_ERROR, COOLDOWN_ACTIVE_ERROR } from '@/lib/posting-caps';
+import { recordPublishError, checkAuthFailures } from '@/lib/error-monitoring';
 import {
   generateIdempotencyKey,
   checkDuplicateAttempt,
@@ -21,7 +23,7 @@ import {
   checkAlreadyPosted,
   DUPLICATE_BLOCKED_ERROR,
 } from '@/lib/duplicate-protection';
-
+import { getGoogleApiCredentials, getRefreshedAccessToken } from '@/lib/google-drive-auth';
 
 // Social API Logic
 const INSTAGRAM_GRAPH_API_URL = 'https://graph.instagram.com/v20.0';
@@ -156,6 +158,43 @@ export async function postNowAction(post: any): Promise<PostResponse> {
                 platform: post.platform || 'unknown',
                 content_id: post.id,
                 reason: errorMsg,
+            });
+            
+            return { success: false, error: errorMsg };
+        }
+
+        // Phase 1: Per-Platform Toggle Check
+        const platform = post.platform || 'unknown';
+        if (!(await isPlatformEnabled(platform))) {
+            const errorMsg = PLATFORM_DISABLED_ERROR;
+            console.error(`[POSTING_BLOCKED] Post ${post.id || 'unknown'} blocked: Platform ${platform} is disabled`);
+            
+            await logBlockedPublish({
+                actor: 'postNowAction',
+                platform,
+                content_id: post.id,
+                reason: `${errorMsg}: Platform ${platform} is disabled`,
+            });
+            
+            return { success: false, error: errorMsg };
+        }
+
+        // Phase 1: Rate Caps and Throttling Check
+        const rateCapCheck = await checkRateCaps(platform);
+        if (!rateCapCheck.allowed) {
+            const errorMsg = rateCapCheck.reason?.includes('Cooldown') ? COOLDOWN_ACTIVE_ERROR : RATE_CAP_EXCEEDED_ERROR;
+            console.error(`[POSTING_BLOCKED] Post ${post.id || 'unknown'} blocked: ${rateCapCheck.reason}`);
+            
+            // Auto-pause platform if cap exceeded
+            if (errorMsg === RATE_CAP_EXCEEDED_ERROR) {
+                await autoPausePlatformIfNeeded(platform, rateCapCheck.reason || 'Rate cap exceeded');
+            }
+            
+            await logBlockedPublish({
+                actor: 'postNowAction',
+                platform,
+                content_id: post.id,
+                reason: `${errorMsg}: ${rateCapCheck.reason}`,
             });
             
             return { success: false, error: errorMsg };
@@ -302,6 +341,18 @@ export async function postNowAction(post: any): Promise<PostResponse> {
             },
         });
 
+        // Phase 1: Error Monitoring - Record errors for auto-pause
+        if (!result.success) {
+            await recordPublishError(post.platform || 'unknown', result.error || 'Unknown error', post.id);
+            
+            // Check for auth failures
+            const authCheck = await checkAuthFailures(post.platform || 'unknown');
+            if (authCheck.shouldPause) {
+                // Auto-pause will be handled by recordPublishError if threshold exceeded
+                console.error(`[ERROR_MONITORING] Auth failures detected for ${post.platform}: ${authCheck.reason}`);
+            }
+        }
+
         if (result.success) {
             revalidatePath('/schedule');
         }
@@ -326,6 +377,10 @@ export async function postNowAction(post: any): Promise<PostResponse> {
         }
 
         console.error(`Error in postNowAction for ${post.platform}:`, error);
+        
+        // Phase 1: Error Monitoring - Record unexpected errors
+        await recordPublishError(post.platform || 'unknown', error.message || 'Unexpected error', post.id).catch(console.error);
+        
         return { success: false, error: `Could not post to ${post.platform}. ${error.message}` };
     }
 }
@@ -564,29 +619,6 @@ const googleDriveSettingsSchema = z.object({
     clientSecret: z.string().min(1, 'Client Secret is required.'),
     refreshToken: z.string().min(1, 'Refresh Token is required.'),
 });
-
-async function getGoogleApiCredentials() {
-    const settingsRef = doc(galleryFirestore, 'settings', 'googleDrive');
-    const docSnap = await getDoc(settingsRef);
-    if (!docSnap.exists()) throw new Error("Google Drive API credentials are not configured in settings.");
-    return docSnap.data();
-}
-
-async function getRefreshedAccessToken(creds: any) {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-            client_id: creds.clientId,
-            client_secret: creds.clientSecret,
-            refresh_token: creds.refreshToken,
-            grant_type: 'refresh_token',
-        }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error_description || 'Failed to refresh access token.');
-    return data.access_token;
-}
 
 export async function getGoogleDriveSettings() {
     try {

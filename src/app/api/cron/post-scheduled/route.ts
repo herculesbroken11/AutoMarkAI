@@ -1,59 +1,82 @@
-
 import { NextResponse } from 'next/server';
-import { collection, query, where, getDocs, orderBy, limit, doc, updateDoc, Timestamp } from 'firebase/firestore';
-import { galleryFirestore as firestore } from '@/firebase/config';
+import { adminFirestore, isAdminSDKAvailable } from '@/firebase/admin';
 import { postNowAction } from '@/app/actions';
 import { isPostingPaused, POSTING_PAUSED_ERROR } from '@/lib/posting-control';
 import { logBlockedPublish, logPublishAttempt } from '@/lib/audit-log';
 import { canPublish, mapLegacyStatus, NOT_APPROVED_ERROR } from '@/lib/post-status';
-import { isScheduledTimeDue, getCurrentUTC } from '@/lib/timezone';
+import { isScheduledTimeDue } from '@/lib/timezone';
 
 export async function GET(request: Request) {
     const logs: string[] = [];
 
-    // Optional: Add a secret to protect your cron job endpoint
     const authToken = (request.headers.get('authorization') || '').split('Bearer ').at(1);
     if (process.env.CRON_SECRET && authToken !== process.env.CRON_SECRET) {
         logs.push('Authentication failed: Invalid cron secret.');
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    if (!isAdminSDKAvailable() || !adminFirestore) {
+        logs.push('Firebase Admin SDK not configured.');
+        return NextResponse.json(
+            { error: 'Firebase Admin SDK not configured', logs },
+            { status: 503 }
+        );
+    }
+
     try {
         logs.push('Cron job started: Looking for a scheduled post to publish...');
 
-        // Phase 1: Global Kill Switch Check
         if (await isPostingPaused()) {
             logs.push(`Posting is paused globally. Blocking all publish attempts.`);
-            
-            // Log blocked attempt
             await logBlockedPublish({
                 actor: 'cron:post-scheduled',
                 platform: 'all',
                 reason: POSTING_PAUSED_ERROR,
             });
-            
-            return NextResponse.json({ 
-                message: 'Posting is paused. No posts will be published.', 
+            return NextResponse.json({
+                message: 'Posting is paused. No posts will be published.',
                 error: POSTING_PAUSED_ERROR,
-                logs 
+                logs,
             }, { status: 503 });
         }
 
-        // Phase 1: Timezone Correctness - Find posts scheduled for now or earlier (UTC)
-        const nowUTC = getCurrentUTC();
-        const nowTimestamp = Timestamp.fromDate(new Date(nowUTC));
-        
-        const postsRef = collection(firestore, 'posts');
-        // Query: status='scheduled' AND (scheduledAt <= now OR scheduledAt is null)
-        // Note: Firestore doesn't support OR easily, so we'll filter after query
-        const q = query(
-            postsRef,
-            where('status', '==', 'scheduled'),
-            orderBy('scheduledAt', 'asc'), // Order by scheduled time (UTC)
-            limit(10) // Get more candidates, filter by time
-        );
+        const nowUTC = new Date();
 
-        const querySnapshot = await getDocs(q);
+        // Query for both legacy 'scheduled' and new 'SCHEDULED' statuses
+        // Firestore doesn't support OR queries easily, so we'll query both and merge
+        const scheduledQuery = adminFirestore
+            .collection('posts')
+            .where('status', '==', 'SCHEDULED')
+            .orderBy('scheduledAt', 'asc')
+            .limit(10);
+        
+        const legacyQuery = adminFirestore
+            .collection('posts')
+            .where('status', '==', 'scheduled')
+            .orderBy('scheduledAt', 'asc')
+            .limit(10);
+        
+        const [scheduledSnapshot, legacySnapshot] = await Promise.all([
+            scheduledQuery.get(),
+            legacyQuery.get()
+        ]);
+        
+        // Merge results, prioritizing SCHEDULED over scheduled
+        const allDocs = [...scheduledSnapshot.docs, ...legacySnapshot.docs];
+        
+        // Remove duplicates and sort by scheduledAt
+        const uniqueDocs = Array.from(
+            new Map(allDocs.map(doc => [doc.id, doc])).values()
+        ).sort((a, b) => {
+            const aTime = a.data().scheduledAt?.toDate ? a.data().scheduledAt.toDate() : new Date(a.data().scheduledAt || 0);
+            const bTime = b.data().scheduledAt?.toDate ? b.data().scheduledAt.toDate() : new Date(b.data().scheduledAt || 0);
+            return aTime.getTime() - bTime.getTime();
+        });
+        
+        const querySnapshot = {
+            docs: uniqueDocs.slice(0, 10),
+            empty: uniqueDocs.length === 0
+        };
 
         if (querySnapshot.empty) {
             logs.push('No scheduled posts found to publish.');
@@ -61,7 +84,7 @@ export async function GET(request: Request) {
         }
 
         // Phase 1: Timezone Correctness - Filter by scheduled time (UTC)
-        const nowUTC = new Date();
+        // nowUTC already defined above, reuse it
         let postToPublish: any = null;
         
         for (const docSnap of querySnapshot.docs) {
@@ -120,10 +143,8 @@ export async function GET(request: Request) {
 
         if (result.success) {
             logs.push(`Successfully posted to ${post.platform}. Post ID: ${result.postId}`);
-            
-            // Update the post status to 'posted' in Firestore
-            const postRef = doc(firestore, 'posts', post.id);
-            await updateDoc(postRef, {
+
+            await adminFirestore.collection('posts').doc(post.id).update({
                 status: 'posted',
                 postedAt: new Date().toISOString(),
                 platformPostId: result.postId,
@@ -144,15 +165,58 @@ export async function GET(request: Request) {
             
             return NextResponse.json({ message: `Successfully posted content ${post.id}.`, logs });
         } else {
-            logs.push(`Failed to post to ${post.platform}. Reason: ${result.error}`);
+            // Check if this is a duplicate block (expected behavior, not an error)
+            const { DUPLICATE_BLOCKED_ERROR } = await import('@/lib/duplicate-protection');
+            const isDuplicateBlocked = result.error === DUPLICATE_BLOCKED_ERROR;
             
-            const postRef = doc(firestore, 'posts', post.id);
-             await updateDoc(postRef, {
+            if (isDuplicateBlocked) {
+                logs.push(`Post ${post.id} blocked: Duplicate detected (this is expected behavior)`);
+                logs.push(`Post was already published or a duplicate attempt was detected`);
+                
+                // Don't update status to 'failed' for duplicates - leave it as 'scheduled' or check if already posted
+                // Check if post was already successfully posted
+                const postSnap = await adminFirestore.collection('posts').doc(post.id).get();
+                const postData = postSnap.data();
+                
+                if (postData?.platformPostId || postData?.status === 'posted' || postData?.status === 'POSTED') {
+                    logs.push(`Post ${post.id} was already successfully posted. No action needed.`);
+                    return NextResponse.json({ 
+                        message: `Post ${post.id} was already published (duplicate blocked).`, 
+                        logs 
+                    });
+                }
+                
+                // If not posted yet, update to failed but log it as expected behavior
+                await adminFirestore.collection('posts').doc(post.id).update({
+                    status: 'failed',
+                    error: result.error,
+                });
+                logs.push(`Updated Firestore status to 'failed' for doc ${post.id} (duplicate blocked)`);
+                
+                // Log blocked publish (not a failure, but a successful prevention)
+                await logPublishAttempt({
+                    actor: 'cron:post-scheduled',
+                    platform: post.platform || 'unknown',
+                    content_id: post.id,
+                    action: 'blocked',
+                    reason: `Duplicate blocked: ${result.error}`,
+                });
+                
+                return NextResponse.json({ 
+                    message: `Post ${post.id} blocked (duplicate detected - this is expected behavior).`, 
+                    logs 
+                });
+            }
+            
+            // For other errors, treat as failure
+            logs.push(`Failed to post to ${post.platform}. Reason: ${result.error}`);
+
+            await adminFirestore.collection('posts').doc(post.id).update({
                 status: 'failed',
                 error: result.error,
             });
             logs.push(`Updated Firestore status to 'failed' for doc ${post.id}`);
-
+            
             // Log failed publish
             await logPublishAttempt({
                 actor: 'cron:post-scheduled',
@@ -164,7 +228,7 @@ export async function GET(request: Request) {
                     error: result.error,
                 },
             });
-
+            
             return NextResponse.json({ error: `Failed to publish post ${post.id}: ${result.error}`, logs }, { status: 500 });
         }
 

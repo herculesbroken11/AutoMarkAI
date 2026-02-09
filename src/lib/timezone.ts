@@ -14,6 +14,12 @@ export const TIMEZONE_CST = 'America/Chicago'; // CST/CDT with automatic DST
 export function formatToCST(date: Date | string): string {
   const dateObj = typeof date === 'string' ? new Date(date) : date;
   
+  // Validate date
+  if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) {
+    console.error('[TIMEZONE] Invalid date provided to formatToCST:', date);
+    return 'Invalid date';
+  }
+  
   return new Intl.DateTimeFormat('en-US', {
     timeZone: TIMEZONE_CST,
     year: 'numeric',
@@ -29,32 +35,73 @@ export function formatToCST(date: Date | string): string {
 
 /**
  * Convert CST/CDT input to UTC Date
- * @param cstDateTime - Date/time string in CST/CDT (e.g., "2024-01-15T14:30:00")
+ * @param cstDateTime - Date/time string in CST/CDT (e.g., "2026-02-10T03:00:00")
  * @returns UTC Date object
  */
 export function parseCSTToUTC(cstDateTime: string): Date {
-  // Parse as if it's in CST, then convert to UTC
-  // Note: This is a simplified approach. For production, use a proper timezone library.
+  // Parse the date/time string components
+  // Format: "YYYY-MM-DDTHH:MM:SS"
+  const [datePart, timePart] = cstDateTime.split('T');
+  if (!datePart || !timePart) {
+    throw new Error(`Invalid date/time format: ${cstDateTime}. Expected format: YYYY-MM-DDTHH:MM:SS`);
+  }
   
-  // Create date string with timezone offset
-  // CST is UTC-6, CDT is UTC-5 (DST)
-  // We'll let the browser handle the conversion by creating a date in the local timezone
-  // then converting to UTC
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hours, minutes, seconds = 0] = timePart.split(':').map(Number);
   
-  // For now, we'll assume the input is in ISO format and append timezone info
-  // In production, use luxon: DateTime.fromISO(cstDateTime, { zone: 'America/Chicago' }).toUTC()
+  // Create a formatter for CST/CDT
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: TIMEZONE_CST,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
   
-  // Simple approach: treat input as CST/CDT and convert
-  // This is approximate - for exact conversion, use a library
-  const date = new Date(cstDateTime);
+  // Find the UTC time that displays as the desired CST/CDT time
+  // Use iterative approach: start with a guess and refine
   
-  // Get CST offset (accounts for DST automatically)
-  const cstDate = new Date(date.toLocaleString('en-US', { timeZone: TIMEZONE_CST }));
-  const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
-  const offset = cstDate.getTime() - utcDate.getTime();
+  // Initial guess: assume CST (UTC-6), so UTC = CST + 6 hours
+  let utcGuess = new Date(Date.UTC(year, month - 1, day, hours + 6, minutes, seconds));
   
-  // Apply offset to get UTC
-  return new Date(date.getTime() - offset);
+  // Iteratively refine until we get the correct CST/CDT time
+  for (let i = 0; i < 10; i++) {
+    const parts = formatter.formatToParts(utcGuess);
+    const cstYear = parseInt(parts.find(p => p.type === 'year')!.value);
+    const cstMonth = parseInt(parts.find(p => p.type === 'month')!.value);
+    const cstDay = parseInt(parts.find(p => p.type === 'day')!.value);
+    const cstHour = parseInt(parts.find(p => p.type === 'hour')!.value);
+    const cstMinute = parseInt(parts.find(p => p.type === 'minute')!.value);
+    const cstSecond = parseInt(parts.find(p => p.type === 'second')!.value);
+    
+    // Check if we match
+    if (cstYear === year && cstMonth === month && cstDay === day && 
+        cstHour === hours && cstMinute === minutes && Math.abs(cstSecond - seconds) <= 1) {
+      return utcGuess;
+    }
+    
+    // Calculate the difference
+    // Create date objects representing the target and current CST/CDT times
+    // We'll use these to calculate the time difference
+    const targetCST = new Date(Date.UTC(year, month - 1, day, hours, minutes, seconds));
+    const currentCST = new Date(Date.UTC(cstYear, cstMonth - 1, cstDay, cstHour, cstMinute, cstSecond));
+    
+    // Calculate difference in milliseconds
+    const diffMs = targetCST.getTime() - currentCST.getTime();
+    
+    // Adjust UTC time by the difference
+    utcGuess = new Date(utcGuess.getTime() + diffMs);
+    
+    // Safety check to prevent infinite loops
+    if (Math.abs(diffMs) < 1000) {
+      break;
+    }
+  }
+  
+  return utcGuess;
 }
 
 /**

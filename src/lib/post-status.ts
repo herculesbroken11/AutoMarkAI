@@ -54,11 +54,12 @@ export function isValidTransition(
 ): boolean {
   const fromNormalized = mapLegacyStatus(from);
   
+  // Phase 1: Approval moves to APPROVED; scheduling (when time is set) moves to SCHEDULED
   const validTransitions: Record<PostStatus, PostStatus[]> = {
     'DRAFT': ['NEEDS_APPROVAL'],
     'NEEDS_APPROVAL': ['APPROVED', 'REJECTED', 'DRAFT'],
     'APPROVED': ['SCHEDULED', 'NEEDS_APPROVAL', 'REJECTED'],
-    'SCHEDULED': ['POSTED', 'FAILED', 'NEEDS_APPROVAL'],
+    'SCHEDULED': ['POSTED', 'FAILED', 'NEEDS_APPROVAL', 'APPROVED'],
     'POSTED': [], // Final state
     'FAILED': ['SCHEDULED', 'NEEDS_APPROVAL'],
     'REJECTED': ['NEEDS_APPROVAL', 'DRAFT'],

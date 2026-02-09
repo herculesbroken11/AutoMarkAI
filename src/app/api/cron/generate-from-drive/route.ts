@@ -1,35 +1,10 @@
-
 import { NextRequest, NextResponse } from 'next/server';
-import { doc, getDoc, addDoc, collection, writeBatch, updateDoc } from 'firebase/firestore';
+import { doc, addDoc, collection, writeBatch, updateDoc } from 'firebase/firestore';
 import { galleryFirestore, storage } from '@/firebase/config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { generateCaptions } from '@/ai/replicate';
 import sharp from 'sharp';
-
-// --- Google Drive API Helpers ---
-
-async function getGoogleApiCredentials() {
-    const settingsRef = doc(galleryFirestore, 'settings', 'googleDrive');
-    const docSnap = await getDoc(settingsRef);
-    if (!docSnap.exists()) throw new Error("Google Drive API credentials are not configured in settings.");
-    return docSnap.data();
-}
-
-async function getRefreshedAccessToken(creds: any) {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-            client_id: creds.clientId,
-            client_secret: creds.clientSecret,
-            refresh_token: creds.refreshToken,
-            grant_type: 'refresh_token',
-        }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error_description || 'Failed to refresh access token.');
-    return data.access_token;
-}
+import { getGoogleApiCredentials, getRefreshedAccessToken, GoogleDriveAuthError } from '@/lib/google-drive-auth';
 
 async function findFolder(accessToken: string, name: string, parentId = 'root') {
     const query = `mimeType='application/vnd.google-apps.folder' and name='${name}' and '${parentId}' in parents and trashed=false`;
@@ -208,9 +183,13 @@ export async function GET(request: NextRequest) {
         logs.push("No new 'After' folders with images found to process. Exiting.");
         return NextResponse.json({ message: 'No new images to process.', logs });
 
-    } catch (error: any) {
+    } catch (error) {
+        if (error instanceof GoogleDriveAuthError) {
+            logs.push(error.message);
+            return NextResponse.json({ error: error.message, code: error.code, logs }, { status: 401 });
+        }
         console.error('[CRON_DRIVE_GENERATE_ERROR]', error);
-        logs.push(`An unexpected error occurred: ${error.message}`);
+        logs.push(`An unexpected error occurred: ${error instanceof Error ? error.message : String(error)}`);
         return NextResponse.json({ error: 'An unexpected error occurred during the cron job.', logs }, { status: 500 });
     }
 }

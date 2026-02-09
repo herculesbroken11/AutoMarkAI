@@ -1,31 +1,5 @@
-
 import { NextRequest, NextResponse } from 'next/server';
-import { doc, getDoc } from 'firebase/firestore';
-import { galleryFirestore } from '@/firebase/config';
-
-// --- Google API Helpers ---
-async function getGoogleApiCredentials() {
-    const settingsRef = doc(galleryFirestore, 'settings', 'googleDrive');
-    const docSnap = await getDoc(settingsRef);
-    if (!docSnap.exists()) throw new Error("Google Drive API credentials are not configured in settings.");
-    return docSnap.data();
-}
-
-async function getRefreshedAccessToken(creds: any) {
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-            client_id: creds.clientId,
-            client_secret: creds.clientSecret,
-            refresh_token: creds.refreshToken,
-            grant_type: 'refresh_token',
-        }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error_description || 'Failed to refresh access token.');
-    return data.access_token;
-}
+import { getGoogleApiCredentials, getRefreshedAccessToken, GoogleDriveAuthError } from '@/lib/google-drive-auth';
 
 export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
@@ -58,7 +32,11 @@ export async function GET(req: NextRequest) {
 
         return new NextResponse(response.body, { headers });
 
-    } catch (error: any) {
+    } catch (error) {
+        if (error instanceof GoogleDriveAuthError) {
+            const status = error.code === 'INVALID_GRANT' ? 401 : 400;
+            return NextResponse.json({ error: error.message, code: error.code }, { status });
+        }
         console.error('Server-side error downloading file:', error);
         return NextResponse.json({ error: 'An internal server error occurred.' }, { status: 500 });
     }

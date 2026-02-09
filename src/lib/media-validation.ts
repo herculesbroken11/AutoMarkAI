@@ -231,3 +231,224 @@ export function createMediaMetadata(params: {
     validated_by: params.validated_by || 'system',
   };
 }
+
+/**
+ * Media Pairing Confidence Check
+ * Phase 1: Validate before/after image pairs have matching tags or folder structure
+ */
+
+export interface PairingConfidence {
+  score: number; // 0-1, where 1 is perfect match
+  confidence: 'high' | 'medium' | 'low';
+  requiresManualReview: boolean;
+  reasons: string[];
+  matchingFactors: {
+    folderMatch: boolean;
+    nameSimilarity: number;
+    timestampProximity: number;
+    tagMatch: boolean;
+  };
+}
+
+const CONFIDENCE_THRESHOLDS = {
+  high: 0.8,
+  medium: 0.5,
+  low: 0.0,
+};
+
+const MANUAL_REVIEW_THRESHOLD = 0.6; // Below this requires manual review
+
+/**
+ * Calculate pairing confidence between before and after images
+ */
+export function calculatePairingConfidence(params: {
+  beforeFile: {
+    id: string;
+    name: string;
+    folderPath: string;
+    tags?: string[];
+    timestamp?: Date | string;
+  };
+  afterFile: {
+    id: string;
+    name: string;
+    folderPath: string;
+    tags?: string[];
+    timestamp?: Date | string;
+  };
+}): PairingConfidence {
+  const { beforeFile, afterFile } = params;
+  const reasons: string[] = [];
+  const matchingFactors = {
+    folderMatch: false,
+    nameSimilarity: 0,
+    timestampProximity: 0,
+    tagMatch: false,
+  };
+
+  // 1. Folder structure match (40% weight)
+  const folderMatch = beforeFile.folderPath === afterFile.folderPath;
+  matchingFactors.folderMatch = folderMatch;
+  if (folderMatch) {
+    reasons.push('Files are in the same folder');
+  } else {
+    reasons.push('Files are in different folders');
+  }
+
+  // 2. Filename similarity (30% weight)
+  const nameSimilarity = calculateNameSimilarity(beforeFile.name, afterFile.name);
+  matchingFactors.nameSimilarity = nameSimilarity;
+  if (nameSimilarity > 0.7) {
+    reasons.push('Filenames are similar');
+  } else if (nameSimilarity > 0.4) {
+    reasons.push('Filenames have some similarity');
+  } else {
+    reasons.push('Filenames are dissimilar');
+  }
+
+  // 3. Timestamp proximity (20% weight)
+  let timestampProximity = 0;
+  if (beforeFile.timestamp && afterFile.timestamp) {
+    const beforeTime = typeof beforeFile.timestamp === 'string' 
+      ? new Date(beforeFile.timestamp).getTime() 
+      : beforeFile.timestamp.getTime();
+    const afterTime = typeof afterFile.timestamp === 'string'
+      ? new Date(afterFile.timestamp).getTime()
+      : afterFile.timestamp.getTime();
+    
+    const timeDiff = Math.abs(afterTime - beforeTime);
+    const hoursDiff = timeDiff / (1000 * 60 * 60);
+    
+    // If within 24 hours, consider it a match
+    if (hoursDiff < 24) {
+      timestampProximity = 1 - (hoursDiff / 24);
+      reasons.push('Files were created within 24 hours');
+    } else {
+      reasons.push(`Files were created ${Math.round(hoursDiff)} hours apart`);
+    }
+  } else {
+    reasons.push('Timestamp information not available');
+  }
+  matchingFactors.timestampProximity = timestampProximity;
+
+  // 4. Tag matching (10% weight)
+  let tagMatch = false;
+  if (beforeFile.tags && afterFile.tags && beforeFile.tags.length > 0 && afterFile.tags.length > 0) {
+    const beforeTags = new Set(beforeFile.tags.map(t => t.toLowerCase()));
+    const afterTags = new Set(afterFile.tags.map(t => t.toLowerCase()));
+    const commonTags = [...beforeTags].filter(tag => afterTags.has(tag));
+    tagMatch = commonTags.length > 0;
+    matchingFactors.tagMatch = tagMatch;
+    
+    if (tagMatch) {
+      reasons.push(`Files share ${commonTags.length} common tag(s)`);
+    } else {
+      reasons.push('Files have no common tags');
+    }
+  } else {
+    reasons.push('Tag information not available');
+  }
+
+  // Calculate weighted score
+  const score = (
+    (folderMatch ? 0.4 : 0) +
+    (nameSimilarity * 0.3) +
+    (timestampProximity * 0.2) +
+    (tagMatch ? 0.1 : 0)
+  );
+
+  // Determine confidence level
+  let confidence: 'high' | 'medium' | 'low';
+  if (score >= CONFIDENCE_THRESHOLDS.high) {
+    confidence = 'high';
+  } else if (score >= CONFIDENCE_THRESHOLDS.medium) {
+    confidence = 'medium';
+  } else {
+    confidence = 'low';
+  }
+
+  const requiresManualReview = score < MANUAL_REVIEW_THRESHOLD;
+
+  return {
+    score,
+    confidence,
+    requiresManualReview,
+    reasons,
+    matchingFactors,
+  };
+}
+
+/**
+ * Calculate similarity between two filenames (0-1)
+ */
+function calculateNameSimilarity(name1: string, name2: string): number {
+  // Normalize names (remove extensions, lowercase)
+  const normalize = (name: string) => {
+    return name.toLowerCase().replace(/\.[^/.]+$/, '').replace(/[^a-z0-9]/g, '');
+  };
+
+  const norm1 = normalize(name1);
+  const norm2 = normalize(name2);
+
+  if (norm1 === norm2) return 1.0;
+
+  // Check for common prefixes/suffixes
+  const minLength = Math.min(norm1.length, norm2.length);
+  let commonChars = 0;
+  for (let i = 0; i < minLength; i++) {
+    if (norm1[i] === norm2[i]) {
+      commonChars++;
+    }
+  }
+
+  // Simple similarity: common characters / max length
+  const maxLength = Math.max(norm1.length, norm2.length);
+  return commonChars / maxLength;
+}
+
+/**
+ * Validate media pairing and return confidence score
+ */
+export async function validateMediaPairing(params: {
+  beforeFileId: string;
+  afterFileId: string;
+  beforeFileName: string;
+  afterFileName: string;
+  beforeFolderPath: string;
+  afterFolderPath: string;
+  beforeTags?: string[];
+  afterTags?: string[];
+  beforeTimestamp?: Date | string;
+  afterTimestamp?: Date | string;
+}): Promise<{
+  isValid: boolean;
+  confidence: PairingConfidence;
+  shouldRequireReview: boolean;
+}> {
+  const confidence = calculatePairingConfidence({
+    beforeFile: {
+      id: params.beforeFileId,
+      name: params.beforeFileName,
+      folderPath: params.beforeFolderPath,
+      tags: params.beforeTags,
+      timestamp: params.beforeTimestamp,
+    },
+    afterFile: {
+      id: params.afterFileId,
+      name: params.afterFileName,
+      folderPath: params.afterFolderPath,
+      tags: params.afterTags,
+      timestamp: params.afterTimestamp,
+    },
+  });
+
+  // High confidence = valid, low confidence = requires review
+  const isValid = confidence.confidence === 'high';
+  const shouldRequireReview = confidence.requiresManualReview;
+
+  return {
+    isValid,
+    confidence,
+    shouldRequireReview,
+  };
+}

@@ -1,39 +1,41 @@
 /**
  * Admin API Route: Posting Control (Kill Switch)
  * Phase 1: Global Kill Switch Toggle
- * 
- * Allows admins to pause/resume all publishing system-wide
+ *
+ * Uses Firebase Admin SDK so the API works without browser auth (server-side).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { galleryFirestore } from '@/firebase/config';
+import { adminFirestore, isAdminSDKAvailable } from '@/firebase/admin';
 
 /**
  * GET - Get current posting control status
  */
 export async function GET(request: NextRequest) {
   try {
-    // TODO: Add admin authentication check
-    // For now, allow access (add auth in production)
-    
-    const settingsRef = doc(galleryFirestore, 'system_settings', 'posting');
-    const docSnap = await getDoc(settingsRef);
-    
-    if (!docSnap.exists()) {
+    if (!isAdminSDKAvailable() || !adminFirestore) {
+      return NextResponse.json(
+        { error: 'Firebase Admin SDK not configured', message: 'Set GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_ADMIN_SERVICE_ACCOUNT' },
+        { status: 503 }
+      );
+    }
+
+    const docSnap = await adminFirestore.collection('system_settings').doc('posting').get();
+
+    if (!docSnap.exists) {
       return NextResponse.json({
         posting_paused: false,
         message: 'Posting is currently enabled (default state)',
       });
     }
-    
+
     const data = docSnap.data();
     return NextResponse.json({
-      posting_paused: data.posting_paused === true,
-      paused_at: data.paused_at,
-      paused_by: data.paused_by,
-      paused_reason: data.paused_reason,
-      last_updated: data.last_updated,
+      posting_paused: data?.posting_paused === true,
+      paused_at: data?.paused_at,
+      paused_by: data?.paused_by,
+      paused_reason: data?.paused_reason,
+      last_updated: data?.last_updated,
     });
   } catch (error: any) {
     console.error('[POSTING_CONTROL_API] Error getting status:', error);
@@ -50,46 +52,44 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    // TODO: Add admin authentication check
-    // For now, allow access (add auth in production)
-    
+    if (!isAdminSDKAvailable() || !adminFirestore) {
+      return NextResponse.json(
+        { error: 'Firebase Admin SDK not configured', message: 'Set GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_ADMIN_SERVICE_ACCOUNT' },
+        { status: 503 }
+      );
+    }
+
     const body = await request.json();
     const { posting_paused, paused_reason, actor } = body;
-    
+
     if (typeof posting_paused !== 'boolean') {
       return NextResponse.json(
         { error: 'Invalid request. posting_paused must be a boolean.' },
         { status: 400 }
       );
     }
-    
-    const settingsRef = doc(galleryFirestore, 'system_settings', 'posting');
+
     const now = new Date().toISOString();
-    
-    const updateData: any = {
+    const updateData: Record<string, unknown> = {
       posting_paused,
       last_updated: now,
     };
-    
+
     if (posting_paused) {
-      // When pausing, record when and why
       updateData.paused_at = now;
       updateData.paused_by = actor || 'system';
-      if (paused_reason) {
-        updateData.paused_reason = paused_reason;
-      }
+      if (paused_reason) updateData.paused_reason = paused_reason;
     } else {
-      // When resuming, clear pause metadata
       updateData.resumed_at = now;
       updateData.resumed_by = actor || 'system';
     }
-    
-    await setDoc(settingsRef, updateData, { merge: true });
-    
+
+    await adminFirestore.collection('system_settings').doc('posting').set(updateData, { merge: true });
+
     return NextResponse.json({
       success: true,
-      message: posting_paused 
-        ? 'Posting has been paused globally. All publish attempts will be blocked.' 
+      message: posting_paused
+        ? 'Posting has been paused globally. All publish attempts will be blocked.'
         : 'Posting has been resumed. Publish attempts will be allowed.',
       posting_paused,
       last_updated: now,

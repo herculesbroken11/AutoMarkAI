@@ -1,0 +1,192 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user is admin
+    function isAdmin() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    
+    // Helper function to check if status is forbidden (non-admins cannot set these)
+    function isForbiddenStatus(status) {
+      return status in ['APPROVED', 'POSTED', 'SCHEDULED', 
+                        'approved', 'posted', 'scheduled',
+                        'Approved', 'Posted', 'Scheduled'];
+    }
+    
+    // ============================================
+    // PHASE 1: System Settings (Admin Only)
+    // ============================================
+    match /system_settings/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    // ============================================
+    // PHASE 1: Posts Collection - Backend-Enforced Approval
+    // ============================================
+    match /posts/{postId} {
+      // Allow read for authenticated users
+      allow read: if isAuthenticated();
+      
+      // Allow create for authenticated users (but status must be DRAFT or NEEDS_APPROVAL)
+      allow create: if isAuthenticated() && 
+        (!('status' in request.resource.data) || 
+         request.resource.data.status in ['DRAFT', 'NEEDS_APPROVAL', 'pending', 'rejected']);
+      
+      // Allow update, but prevent client from setting APPROVED/POSTED status
+      allow update: if isAuthenticated() && (
+        // Admins can set any status (for approval actions)
+        isAdmin() ||
+        // Non-admins: must NOT be setting forbidden values
+        (
+          // If status is being updated, it must NOT be forbidden
+          !('status' in request.resource.data) || 
+          !isForbiddenStatus(request.resource.data.status)
+        ) &&
+        // Must NOT be setting posted_at
+        !('posted_at' in request.resource.data) &&
+        // Must NOT be setting platform_post_id
+        !('platform_post_id' in request.resource.data)
+      );
+      
+      // Allow delete for admins only
+      allow delete: if isAdmin();
+    }
+    
+    // ============================================
+    // PHASE 1: Publish Attempts (Read/Write for authenticated)
+    // ============================================
+    match /publish_attempts/{attemptId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // ============================================
+    // PHASE 1: Locks (Read/Write for authenticated)
+    // ============================================
+    match /locks/{lockId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // ============================================
+    // PHASE 1: Audit Logs (Read for authenticated, Write for server only)
+    // ============================================
+    match /audit_logs/{logId} {
+      allow read: if isAuthenticated();
+      // Only server can write (client writes blocked)
+      allow write: if false;
+    }
+    
+    // ============================================
+    // Settings Collection (Read for authenticated, Write for admin)
+    // TODO: API routes should use Firebase Admin SDK instead of client SDK
+    // For now, allowing reads for authenticated users
+    // ============================================
+    match /settings/{document} {
+      // Allow read for authenticated users (needed for API routes)
+      // Note: Server-side API routes using client SDK need user auth context
+      // Proper solution: Use Firebase Admin SDK in API routes (bypasses rules)
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    // ============================================
+    // Other Collections (Standard Rules)
+    // ============================================
+    match /gallery/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /bookings/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /customers/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /services/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /admins/{adminId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /notifications/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /reviews/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /rewards/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /points/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /vehicles/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    match /availability/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /matched_pairs/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    match /drive_scan_state/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    match /businessSettings/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /membershipSettings/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /enginenotifications/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /synced_files/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // Default: Deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

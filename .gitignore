@@ -33,6 +33,9 @@ pnpm-debug.log*
 .firebase/
 *.firebase.*
 firebase-debug.log
+# Service account key (never commit)
+*-firebase-adminsdk-*.json
+porters-detailing-firebase-adminsdk-*.json
 database-debug.log
 storage-debug.log
 *~
