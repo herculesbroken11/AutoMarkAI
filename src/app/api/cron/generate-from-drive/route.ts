@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { doc, addDoc, collection, writeBatch, updateDoc } from 'firebase/firestore';
+import { doc, collection, writeBatch } from 'firebase/firestore';
 import { galleryFirestore, storage } from '@/firebase/config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { generateCaptions } from '@/ai/replicate';
 import sharp from 'sharp';
 import { getGoogleApiCredentials, getRefreshedAccessToken, GoogleDriveAuthError } from '@/lib/google-drive-auth';
+import { adminFirestore, isAdminSDKAvailable } from '@/firebase/admin';
 
 async function findFolder(accessToken: string, name: string, parentId = 'root') {
     const query = `mimeType='application/vnd.google-apps.folder' and name='${name}' and '${parentId}' in parents and trashed=false`;
@@ -154,20 +155,33 @@ export async function GET(request: NextRequest) {
             });
             if (!captions || captions.length === 0) throw new Error("AI failed to generate captions.");
 
-            const batch = writeBatch(galleryFirestore);
-            captions.forEach(post => {
-                const newPostRef = doc(collection(galleryFirestore, "posts"));
-                batch.set(newPostRef, {
-                    ...post,
-                    imageUrls: imageUrls, // Save array of URLs
-                    vehicle: contextPath,
-                    service: contextPath,
-                    status: 'pending',
-                    createdAt: new Date().toISOString(),
-                    originalDriveIds: selectedImages.map(img => img.id),
+            const postData = {
+                imageUrls,
+                vehicle: contextPath,
+                service: contextPath,
+                status: 'pending',
+                createdAt: new Date().toISOString(),
+                originalDriveIds: selectedImages.map(img => img.id),
+            };
+
+            if (isAdminSDKAvailable() && adminFirestore) {
+                const batch = adminFirestore.batch();
+                captions.forEach(post => {
+                    const newPostRef = adminFirestore.collection('posts').doc();
+                    batch.set(newPostRef, {
+                        ...post,
+                        ...postData,
+                    });
                 });
-            });
-            await batch.commit();
+                await batch.commit();
+            } else {
+                const batch = writeBatch(galleryFirestore);
+                captions.forEach(post => {
+                    const newPostRef = doc(collection(galleryFirestore, 'posts'));
+                    batch.set(newPostRef, { ...post, ...postData });
+                });
+                await batch.commit();
+            }
             logs.push(`Saved ${captions.length} posts for approval.`);
 
             const processedAfterFolderId = await findOrCreateFolder(accessToken, "processed after", afterFolder.parents[0]);
